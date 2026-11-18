@@ -422,7 +422,7 @@ public final class PhoneDesk {
         }
     }
 
-    /// UU 手动选屏后，把同一份资源库切到正在推流的手机屏。
+    /// UU 手动选屏后，把当前窗口或资源库接续到正在推流的手机屏。
     public func selectDisplay(_ id: DisplayID, landscape: DisplayID?) {
         guard let primary = display?.id, id == primary || id == landscape,
               requestedDisplay != id else { return }
@@ -432,13 +432,27 @@ public final class PhoneDesk {
                   self.activeDisplay != id else { return }
             self.activeLandscape = id == primary ? nil : id
             self.state.closeButton = nil
+            let showList = self.state.listVisible
             if var placement = self.placement {
                 placement.width = self.screenFit.baseWidth
                 placement.settled = nil
+                if !showList,
+                   let frame = await self.fill(&placement, on: id),
+                   let bounds = self.displays.bounds(id),
+                   bounds.contains(frame.origin) {
+                    self.placement = placement
+                    self.state.screen = .ready(id)
+                    await self.windows.focus(placement.window.key)
+                    return
+                }
+                // 窗口暂时挪不过去时，先显示资源库，仍可从原窗口继续。
+                placement.settled = nil
                 self.placement = placement
+                self.state.closeButton = nil
+                if !showList { Log.warn("切屏时未能接续窗口：\(placement.window.label)") }
             }
-            self.state.screen = .ready(id)
             self.state.listVisible = true
+            self.state.screen = .ready(id)
             await self.matchWidth()
         }
     }
