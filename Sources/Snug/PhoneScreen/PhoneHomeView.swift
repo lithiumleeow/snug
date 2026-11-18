@@ -44,6 +44,7 @@ struct PhoneHomeView: View {
     let pages: PhonePages
     let intents: any PhoneIntents
 
+    @AppStorage("phoneLibraryPinnedApps") private var pinnedApps = ""
     @State private var tab: Tab
     @State private var confirming: Confirm?
 
@@ -188,12 +189,38 @@ struct PhoneHomeView: View {
     @ViewBuilder private var page: some View {
         switch tab {
         case .running: runningPage
-        case .all: AllApps(catalog: catalog, quitting: phone.quitting, intents: intents)
+        case .all: appGrid(catalog.installed)
         }
+    }
+
+    private var pinnedIDs: [String] { pinnedApps.split(separator: "\n").map(String.init) }
+
+    private var favorites: [InstalledApp] {
+        let installed = Dictionary(catalog.installed.map { ($0.app.bundleID, $0) },
+                                   uniquingKeysWith: { first, _ in first })
+        return pinnedIDs.compactMap { installed[$0] }
+    }
+
+    private func togglePin(_ id: String) {
+        var ids = pinnedIDs
+        if let index = ids.firstIndex(of: id) {
+            ids.remove(at: index)
+        } else {
+            ids.append(id)
+        }
+        pinnedApps = ids.joined(separator: "\n")
+    }
+
+    private func appGrid(_ apps: [InstalledApp]) -> some View {
+        AllApps(apps: apps, catalog: catalog, quitting: phone.quitting, intents: intents,
+                pinnedIDs: Set(pinnedIDs), togglePin: togglePin)
     }
 
     private var runningPage: some View {
         VStack(alignment: .leading, spacing: 24) {
+            if !favorites.isEmpty {
+                TitledSection("常用 App") { appGrid(favorites) }
+            }
             if let placed = phone.placed {
                 TitledSection("当前 App") { appCard(catalog.app(of: placed.window)) }
             }
@@ -323,19 +350,23 @@ private struct Banner<Actions: View>: View {
 
 /// 本机所有 App：图标网格，4 列，按字典序；正在运行的下方有圆点，正在退出的点不了
 private struct AllApps: View {
+    let apps: [InstalledApp]
     let catalog: AppCatalog
     let quitting: Set<Int32>
     let intents: any PhoneIntents
 
+    let pinnedIDs: Set<String>
+    let togglePin: (String) -> Void
+
     private static let columns = Array(repeating: GridItem(.flexible(), spacing: 0), count: 4)
 
     var body: some View {
-        if catalog.installed.isEmpty {
+        if apps.isEmpty {
             EmptyState(symbol: nil, text: "正在读取")
         } else {
             let running = Dictionary(catalog.running.map { ($0.app.bundleID, $0.pid) }, uniquingKeysWith: { first, _ in first })
             LazyVGrid(columns: Self.columns, spacing: 20) {
-                ForEach(catalog.installed) { item in
+                ForEach(apps) { item in
                     let pid = running[item.app.bundleID]
                     Button { intents.open(item.app) } label: {
                         VStack(spacing: 8) {
@@ -351,6 +382,12 @@ private struct AllApps: View {
                     }
                     .buttonStyle(PressableStyle())
                     .disabled(pid.map(quitting.contains) ?? false)
+                    .contextMenu {
+                        let pinned = pinnedIDs.contains(item.app.bundleID)
+                        Button(pinned ? "取消置顶" : "置顶到常用 App", systemImage: pinned ? "pin.slash" : "pin") {
+                            togglePin(item.app.bundleID)
+                        }
+                    }
                 }
             }
         }
