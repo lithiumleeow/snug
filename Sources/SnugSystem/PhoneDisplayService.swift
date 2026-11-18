@@ -142,7 +142,8 @@ public final class PhoneDisplayService: PhoneDisplays {
     public func windowArea(_ id: DisplayID) -> CGRect? {
         guard let screen = Screens.screen(for: id) else { return nil }
         var area = Screens.axRect(fromAppKit: screen.visibleFrame)
-        area.size.height -= ScreenFit.homeBarHeight(screenWidth: screen.frame.width)
+        area.size.height -= ScreenFit.homeBarHeight(screenWidth: screen.frame.width,
+                                                   landscape: screen.frame.width > screen.frame.height)
         return area
     }
 
@@ -168,17 +169,21 @@ public final class PhoneDisplayService: PhoneDisplays {
 
     /// 保留独立的横屏身份，让 UU 切屏时按横向尺寸重新建立推流。
     private func configureLandscape(for fit: ScreenFit) async {
-        let portrait = fit.size(width: fit.baseWidth)
+        // 横屏至少 1280 点宽，同时保留 800 点高，给 2 倍模式和窗口留出空间。
+        let width = max(1280, Int((Double(ScreenFit.minHeight) * fit.ratio).rounded(.up)))
+        let height = Int((Double(width) / fit.ratio).rounded())
         let settings = CGVirtualDisplaySettings()
         settings.hiDPI = true
         settings.modes = [
-            CGVirtualDisplayMode(width: UInt(portrait.height), height: UInt(portrait.width), refreshRate: 60)
+            CGVirtualDisplayMode(width: UInt(width), height: UInt(height), refreshRate: 60)
         ]
 
         if let landscapeDisplay {
             if !autoreleasepool(invoking: { landscapeDisplay.apply(settings) }) {
                 Log.warn("Duo 内屏横屏更新分辨率失败")
+                return
             }
+            await selectLandscapeHiDPI(landscapeDisplay.displayID, width: width, height: height)
             return
         }
 
@@ -200,11 +205,29 @@ public final class PhoneDisplayService: PhoneDisplays {
         landscapeDisplay = display
         let id = display.displayID
         if await wait(id, online: true, timeout: Self.onlineTimeout) {
-            Log.info("Duo 内屏横屏 #\(id) 已就绪（\(Int(portrait.height))×\(Int(portrait.width))）")
+            await selectLandscapeHiDPI(id, width: width, height: height)
         } else {
             Log.warn("Duo 内屏横屏 #\(id) 创建后未上线")
             landscapeDisplay = nil
         }
+    }
+
+    private func selectLandscapeHiDPI(_ id: DisplayID, width: Int, height: Int) async {
+        let listed = await poll(timeout: Self.modesTimeout, every: 0.1) {
+            DisplayMode.hasHiDPI(id, width: width, height: height)
+        }
+        guard listed else {
+            Log.warn("Duo 内屏横屏 #\(id) 未列出 \(width)×\(height) HiDPI，当前 \(DisplayMode.describe(id))")
+            return
+        }
+        if DisplayMode.hiDPIWidth(id) != width || DisplayMode.current(id)?.height != height {
+            let status = await runHelper(id, .hiDPI(width: width, height: height))
+            guard status == 0 else {
+                Log.warn("Duo 内屏横屏 #\(id) 切换 HiDPI 失败，当前 \(DisplayMode.describe(id))")
+                return
+            }
+        }
+        Log.info("Duo 内屏横屏 #\(id) 已就绪（\(DisplayMode.describe(id))）")
     }
 
     private func make(serial: UInt32, fit: ScreenFit) -> CGVirtualDisplay? {

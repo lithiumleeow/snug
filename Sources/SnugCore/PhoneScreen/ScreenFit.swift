@@ -76,8 +76,9 @@ public struct ScreenFit: Equatable, Sendable, CustomStringConvertible {
     }
 
     /// 底部小横条的高度（这一档的点）：跟着缩放，手指点着一样大。放上来的窗口让出这一条
-    public static func homeBarHeight(screenWidth: CGFloat) -> CGFloat {
-        (baseHomeBarHeight * scale(screenWidth: screenWidth)).rounded()
+    public static func homeBarHeight(screenWidth: CGFloat, landscape: Bool = false) -> CGFloat {
+        let height = landscape ? baseHomeBarHeight / 2 : baseHomeBarHeight
+        return (height * scale(screenWidth: screenWidth)).rounded()
     }
 }
 

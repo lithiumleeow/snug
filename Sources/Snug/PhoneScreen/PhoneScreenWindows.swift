@@ -63,6 +63,7 @@ final class PhoneScreenWindows {
         list.setFrame(screen.frame, display: true)
         homeBar.setFrame(homeBarFrame(on: screen), display: true)
         homeBarView?.scale = ScreenFit.scale(screenWidth: screen.frame.width)
+        homeBarView?.landscape = screen.frame.width > screen.frame.height
         homeBarView?.showsCamera = state.config.screenshot
 
         let showList = phone.listVisible || phone.placed == nil
@@ -166,7 +167,8 @@ final class PhoneScreenWindows {
     private func homeBarFrame(on screen: NSScreen) -> NSRect {
         let visible = screen.visibleFrame
         return NSRect(x: visible.minX, y: visible.minY, width: visible.width,
-                      height: ScreenFit.homeBarHeight(screenWidth: screen.frame.width))
+                      height: ScreenFit.homeBarHeight(screenWidth: screen.frame.width,
+                                                      landscape: screen.frame.width > screen.frame.height))
     }
 
     /// 浮层上显示的截图结果和当时的倍率：换了才重建视图
@@ -210,7 +212,7 @@ final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
-/// 底部小横条：点一下，或者往上滑，回到 App 资源库。中间是 SF Symbols 的 chevron.compact.up；
+/// 底部小横条：点一下，或者往上滑，回到 App 资源库。横屏箭头靠右，避开手机中间的小白条。
 /// 开着截图键时左边多一个相机键（camera.viewfinder），点左边这一段是截图。
 /// 手机屏换到更宽的一档时跟着放大（scale），在手机上看着、点着、滑着都和基准宽度一样
 final class HomeBarView: NSView {
@@ -222,6 +224,9 @@ final class HomeBarView: NSView {
     /// 这一档比基准宽度宽几倍（ScreenFit.scale）
     var scale: CGFloat = 1 {
         didSet { if scale != oldValue { updateIcons() } }
+    }
+    var landscape = false {
+        didSet { if landscape != oldValue { updateIcons() } }
     }
     /// 设置里开着「截图」
     var showsCamera = false {
@@ -239,12 +244,7 @@ final class HomeBarView: NSView {
         camera.imageScaling = .scaleNone
         camera.isHidden = true
         addSubview(camera)
-        grabber.translatesAutoresizingMaskIntoConstraints = false
         addSubview(grabber)
-        NSLayoutConstraint.activate([
-            grabber.centerXAnchor.constraint(equalTo: centerXAnchor),
-            grabber.centerYAnchor.constraint(equalTo: centerYAnchor),
-        ])
     }
 
     @available(*, unavailable)
@@ -252,9 +252,9 @@ final class HomeBarView: NSView {
 
     private func updateIcons() {
         grabber.image = NSImage(systemSymbolName: "chevron.compact.up", accessibilityDescription: "App 资源库")?
-            .withSymbolConfiguration(.init(pointSize: 22 * scale, weight: .semibold))
+            .withSymbolConfiguration(.init(pointSize: (landscape ? 12 : 22) * scale, weight: .semibold))
         camera.image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "截图")?
-            .withSymbolConfiguration(.init(pointSize: 20 * scale, weight: .semibold))
+            .withSymbolConfiguration(.init(pointSize: (landscape ? 12 : 20) * scale, weight: .semibold))
         needsLayout = true
     }
 
@@ -264,6 +264,10 @@ final class HomeBarView: NSView {
     override func layout() {
         super.layout()
         camera.frame = cameraArea
+        let targetWidth = PhoneStyle.touchTarget * scale
+        let centerX = landscape ? bounds.maxX - targetWidth / 2 : bounds.midX
+        grabber.frame = NSRect(x: centerX - targetWidth / 2, y: 0,
+                               width: targetWidth, height: bounds.height)
     }
 
     override var isOpaque: Bool { true }
