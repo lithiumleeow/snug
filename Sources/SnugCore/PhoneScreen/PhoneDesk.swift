@@ -156,6 +156,8 @@ public final class PhoneDesk {
     private let ledger: RestoreRecord<PhoneRecord>
     private let zoomFile: JSONFile<ZoomBook>
     private var zoomBook: ZoomBook
+    private let landscapeZoomFile: JSONFile<ZoomBook>
+    private var landscapeZoomBook: ZoomBook
     private let leftBehindFile: JSONFile<LeftBehindBook>
     private var leftBehind: LeftBehindBook
     private let lane = SerialLane()
@@ -207,6 +209,8 @@ public final class PhoneDesk {
         ledger = RestoreRecord(url: paths.phoneRecord)
         zoomFile = JSONFile(url: paths.zoomBook)
         zoomBook = zoomFile.loadOrQuarantine() ?? ZoomBook()
+        landscapeZoomFile = JSONFile(url: paths.zoomBook.deletingLastPathComponent().appendingPathComponent("zoom-landscape.json"))
+        landscapeZoomBook = landscapeZoomFile.loadOrQuarantine() ?? ZoomBook()
         leftBehindFile = JSONFile(url: paths.leftBehind)
         leftBehind = leftBehindFile.loadOrQuarantine() ?? LeftBehindBook()
     }
@@ -390,8 +394,13 @@ public final class PhoneDesk {
         begin(.zooming)
         lane.run {
             if await self.changeZoom(by: delta), let p = self.placement, let bundle = p.window.bundleID {
-                self.zoomBook.remember(p.record.zoom, for: bundle)
-                self.saveZoomBook()
+                if self.activeLandscape != nil {
+                    self.landscapeZoomBook.remember(p.record.zoom, for: bundle)
+                    self.saveZoomBook(landscape: true)
+                } else {
+                    self.zoomBook.remember(p.record.zoom, for: bundle)
+                    self.saveZoomBook()
+                }
             }
             self.state.work = nil
         }
@@ -400,9 +409,14 @@ public final class PhoneDesk {
     /// 设置里改了默认级数：以它为准，各 App 记住的级数一起清掉（不然改了看起来不起作用）
     public func setDefaultZoom(_ steps: Int) {
         defaultZoom = steps
-        guard !zoomBook.remembered.isEmpty else { return }
-        zoomBook.forgetAll()
-        saveZoomBook()
+        if !zoomBook.remembered.isEmpty {
+            zoomBook.forgetAll()
+            saveZoomBook()
+        }
+        if !landscapeZoomBook.remembered.isEmpty {
+            landscapeZoomBook.forgetAll()
+            saveZoomBook(landscape: true)
+        }
     }
 
     /// 设置里换了手机型号：手机屏在就在线换成新比例，放着的窗口按新比例重新找档、铺满；不在就等下次加屏时按新的建
@@ -443,6 +457,7 @@ public final class PhoneDesk {
                     self.placement = placement
                     self.state.screen = .ready(id)
                     await self.windows.focus(placement.window.key)
+                    await self.applyPreferredZoom()
                     return
                 }
                 // 窗口暂时挪不过去时，先显示资源库，仍可从原窗口继续。
@@ -792,6 +807,7 @@ public final class PhoneDesk {
         guard let id = activeDisplay, let p = placement else { return }
         // 先换档：App 一时读不到时 refill 什么都不做，档位也得对；换档触发的复查会在 App 恢复后补铺
         await switchWidth(id, to: p.width)
+        await applyPreferredZoom()
         await refill(because: "回到窗口")
         state.listVisible = false
         await windows.focus(p.window.key)
@@ -872,7 +888,7 @@ public final class PhoneDesk {
         Log.info("\(window.label) 放上手机屏（\(took)s）：原位 \(next.record.original.short)\(was)，\(fill)")
 
         // 带着字号回来的不重复放大，只补差的那几级
-        let steps = zoomBook.steps(for: window.bundleID, default: defaultZoom) - next.record.zoom
+        let steps = preferredZoom(for: window.bundleID) - next.record.zoom
         guard zoom, steps != 0 else { return }
         // 窗口已经在手机屏上了，剩下的只是调字号
         state.work = .zooming
@@ -1357,11 +1373,23 @@ public final class PhoneDesk {
         }
     }
 
-    private func saveZoomBook() {
+    private func preferredZoom(for bundleID: String?) -> Int {
+        let portrait = zoomBook.steps(for: bundleID, default: defaultZoom)
+        guard activeLandscape != nil else { return portrait }
+        return landscapeZoomBook.steps(for: bundleID, default: portrait)
+    }
+
+    private func applyPreferredZoom() async {
+        guard let placement, !placement.asking, ZoomBook.isZoomable(placement.window.bundleID) else { return }
+        await changeZoom(by: preferredZoom(for: placement.window.bundleID) - placement.record.zoom)
+    }
+
+    private func saveZoomBook(landscape: Bool = false) {
         do {
-            try zoomFile.save(zoomBook)
+            if landscape { try landscapeZoomFile.save(landscapeZoomBook) }
+            else { try zoomFile.save(zoomBook) }
         } catch {
-            Log.error("记不住字号级数（zoom.json 写不进去）：\(error)")
+            Log.error("记不住\(landscape ? "横屏" : "竖屏")字号级数：\(error)")
         }
     }
 }
