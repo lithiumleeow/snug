@@ -166,6 +166,34 @@ public final class PhoneDesk {
     private let lane = SerialLane()
 
     private var wanted = false
+    private func followDetachedDialog(of owner: WindowKey) async {
+        guard remote, !state.listVisible, let id = activeDisplay,
+              let area = displays.windowArea(id) else { return }
+        if let previous = followedDialog, await !windows.exists(previous.key) { followedDialog = nil }
+        guard let key = await windows.detachedDialog(of: owner.pid), key != owner,
+              key != state.sideWindow, followedDialog?.key != key,
+              await windows.isShown(key), let look = await windows.look(key),
+              let screen = displays.bounds(id),
+              !screen.contains(CGPoint(x: look.frame.midX, y: look.frame.midY)) else { return }
+
+        let width = min(look.frame.width, area.width)
+        let height = min(look.frame.height, area.height)
+        let target = CGRect(x: area.midX - width / 2, y: area.midY - height / 2, width: width, height: height)
+        await restoreFollowedDialog()
+        followedDialog = (key, look.frame)
+        guard let placed = await windows.move(key, to: target),
+              screen.contains(CGPoint(x: placed.midX, y: placed.midY)) else { return }
+        await windows.focus(key)
+    }
+
+    private func restoreFollowedDialog() async {
+        guard let dialog = followedDialog else { return }
+        followedDialog = nil
+        if await windows.exists(dialog.key) {
+            _ = await windows.move(dialog.key, to: dialog.original)
+        }
+    }
+
     /// 远程在不在进行（会话层的结论，含断开后等重连的那段）：这期间别的屏可能处在远程用的临时模式
     private var remote = false
     private var display: (id: DisplayID, bornAt: TimeInterval)?
@@ -190,6 +218,7 @@ public final class PhoneDesk {
     private var failures = 0
     private var pendingRetry: Task<Void, Never>?
     private var verifying = false
+    private var followedDialog: (key: WindowKey, original: CGRect)?
     private var checkingReturns = false
     /// 刚在 Snug 之外没了的窗口：它的 App 在 replaceWait 内开出不在 known 里的新窗口，就接着放上来
     private var replaced: (pid: Int32, known: Set<WindowKey>, until: TimeInterval)?
@@ -540,6 +569,7 @@ public final class PhoneDesk {
         lane.run {
             guard self.display?.id == primary, self.requestedDisplay == id,
                   self.activeDisplay != id else { return }
+            await self.restoreFollowedDialog()
             await self.restoreSideWindow()
             self.activeLandscape = id == primary ? nil : id
             self.state.landscape = self.activeLandscape != nil
@@ -614,6 +644,7 @@ public final class PhoneDesk {
                 self.state.listVisible = true
                 await self.matchWidth()
             }
+            await self.followDetachedDialog(of: p.window.key)
         }
     }
 
@@ -746,6 +777,7 @@ public final class PhoneDesk {
     }
 
     private func removeScreen() async {
+        await restoreFollowedDialog()
         await restoreSideWindow()
         state.sideWindow = nil
         state.landscape = false
@@ -1201,6 +1233,7 @@ public final class PhoneDesk {
     /// 没放回去时窗口还在手机屏上，照旧算放着（字号按实际缩回了多少算），还原记录也留着
     private func returnToOriginal(_ p: Placement, restoringState: Bool = true) async -> Bool {
         guard await restoreSideWindow() else { return false }
+        await restoreFollowedDialog()
         if let left = await putBack(p.record, restoringState: restoringState) {
             var p = p
             p.record = left

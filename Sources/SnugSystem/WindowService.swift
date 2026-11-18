@@ -148,6 +148,17 @@ public final class WindowService: WindowControl {
         }
     }
 
+    public func detachedDialog(of pid: Int32) async -> WindowKey? {
+        await run {
+            for element in AX.respondingWindows(pid: pid) ?? [] {
+                guard AX.string(element, kAXSubroleAttribute) == kAXDialogSubrole,
+                      let id = AX.windowID(element) else { continue }
+                return WindowKey(pid: pid, id: id)
+            }
+            return nil
+        }
+    }
+
     public func close(_ window: WindowKey) async -> Bool {
         await run {
             guard let element = AX.element(for: window),

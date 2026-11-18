@@ -50,6 +50,10 @@ public struct WindowLook: Equatable, Sendable {
 /// 搬窗口、调字号。辅助功能的调用会阻塞（App 卡住时每次最多等一会儿），实现放在自己的后台队列上。
 /// 除了 exists，读写窗口都经过窗口所在的 App：返回 nil / false 可能只是 App 一时没响应、或者没有辅助功能权限，
 /// 窗口是不是真没了，只有 exists 说了算
+public extension WindowControl {
+    func detachedDialog(of pid: Int32) async -> WindowKey? { nil }
+}
+
 public protocol WindowControl: Sendable {
     /// 窗口还在不在：问窗口服务器，不经过 App，App 卡住、没有权限都不影响
     func exists(_ window: WindowKey) async -> Bool
@@ -73,6 +77,7 @@ public protocol WindowControl: Sendable {
     func shownWindows(of pid: Int32) async -> [WindowInfo]
     /// App 在问用户的那个窗口：挂着「要存储吗」的文档窗口，或单独的对话框（多个文稿没存时的「要先检查吗」）
     func askingWindow(of pid: Int32) async -> WindowInfo?
+    func detachedDialog(of pid: Int32) async -> WindowKey?
     /// 按窗口的关闭按钮（全屏的按了没反应，要先退出全屏）。找不到窗口或按钮返回 false
     func close(_ window: WindowKey) async -> Bool
     /// 窗口关闭按钮的位置（全局坐标，左上原点）；没有关闭按钮、读不到返回 nil
