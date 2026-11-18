@@ -21,6 +21,7 @@ public final class PhoneDisplayService: PhoneDisplays {
     /// 换了模式表等系统列出新档位最多这么久
     static let modesTimeout: TimeInterval = 3
 
+    private var landscapeDisplay: CGVirtualDisplay?
     private var displays: [DisplayID: CGVirtualDisplay] = [:]
     /// 每块屏登记的是哪个比例的档位：换档时按它算高
     private var fits: [DisplayID: ScreenFit] = [:]
@@ -48,6 +49,7 @@ public final class PhoneDisplayService: PhoneDisplays {
             // 刚上线时模式还在变，等它定下来再看是哪一档
             try? await Task.sleep(for: .seconds(0.8))
             if width(id) != fit.baseWidth { await setWidth(id, fit.baseWidth) }
+            await configureLandscape(for: fit)
             return id
         }
         throw madeAny ? PhoneScreenError.neverOnline : PhoneScreenError.createFailed
@@ -57,6 +59,12 @@ public final class PhoneDisplayService: PhoneDisplays {
         guard displays[id] != nil else {
             Log.warn("要撤的手机屏 #\(id) 不是本进程建的")
             return !Self.isOnline(id)
+        }
+        if let landscapeID = landscapeDisplay?.displayID {
+            autoreleasepool { landscapeDisplay = nil }
+            if !(await wait(landscapeID, online: false, timeout: Self.offlineTimeout)) {
+                Log.warn("Duo 内屏横屏 #\(landscapeID) 释放后仍在线")
+            }
         }
         autoreleasepool { displays[id] = nil }
         fits[id] = nil
@@ -92,6 +100,7 @@ public final class PhoneDisplayService: PhoneDisplays {
         await setWidth(id, fit.baseWidth)
         let took = String(format: "%.1f", ProcessInfo.processInfo.systemUptime - started)
         Log.info("手机屏 #\(id) 换成 \(fit) 的档位（\(took)s，原来 \(from)），现在 \(DisplayMode.describe(id))")
+        await configureLandscape(for: fit)
         return true
     }
 
@@ -141,7 +150,7 @@ public final class PhoneDisplayService: PhoneDisplays {
     }
 
     public func otherDisplays() -> [OtherDisplay] {
-        Self.onlineIDs().filter { displays[$0] == nil }.compactMap { id in
+        Self.onlineIDs().filter { displays[$0] == nil && $0 != landscapeDisplay?.displayID }.compactMap { id in
             DisplayMode.current(id).map { OtherDisplay(id: id, name: Screens.name(of: id), mode: $0, asleep: CGDisplayIsAsleep(id) != 0) }
         }
     }
@@ -155,6 +164,47 @@ public final class PhoneDisplayService: PhoneDisplays {
     }
 
     // MARK: 内部
+
+    /// 保留独立的横屏身份，让 UU 切屏时按横向尺寸重新建立推流。
+    private func configureLandscape(for fit: ScreenFit) async {
+        let portrait = fit.size(width: fit.baseWidth)
+        let settings = CGVirtualDisplaySettings()
+        settings.hiDPI = true
+        settings.modes = [
+            CGVirtualDisplayMode(width: UInt(portrait.height), height: UInt(portrait.width), refreshRate: 60)
+        ]
+
+        if let landscapeDisplay {
+            if !autoreleasepool(invoking: { landscapeDisplay.apply(settings) }) {
+                Log.warn("Duo 内屏横屏更新分辨率失败")
+            }
+            return
+        }
+
+        let descriptor = CGVirtualDisplayDescriptor()
+        descriptor.name = "Duo 内屏横屏"
+        descriptor.maxPixelsWide = UInt32(ScreenFit.maxPixels.height)
+        descriptor.maxPixelsHigh = UInt32(ScreenFit.maxPixels.width)
+        descriptor.sizeInMillimeters = CGSize(width: PhoneScreenSpec.millimeters.height, height: PhoneScreenSpec.millimeters.width)
+        descriptor.vendorID = PhoneScreenSpec.vendorID
+        descriptor.productID = PhoneScreenSpec.productID
+        descriptor.serialNum = 0x44554F01
+        guard let display = autoreleasepool(invoking: {
+            guard let display = CGVirtualDisplay(descriptor: descriptor), display.apply(settings) else { return nil as CGVirtualDisplay? }
+            return display
+        }) else {
+            Log.warn("Duo 内屏横屏创建失败")
+            return
+        }
+        landscapeDisplay = display
+        let id = display.displayID
+        if await wait(id, online: true, timeout: Self.onlineTimeout) {
+            Log.info("Duo 内屏横屏 #\(id) 已就绪（\(Int(portrait.height))×\(Int(portrait.width))）")
+        } else {
+            Log.warn("Duo 内屏横屏 #\(id) 创建后未上线")
+            landscapeDisplay = nil
+        }
+    }
 
     private func make(serial: UInt32, fit: ScreenFit) -> CGVirtualDisplay? {
         let descriptor = CGVirtualDisplayDescriptor()
