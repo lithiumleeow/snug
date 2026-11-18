@@ -1,6 +1,5 @@
 // 屏幕适配：手机屏的比例跟着用户的手机走，宽度跟着屏上的窗口走。
-// 比例：UU 把画面等比缩放、居中铺在手机上，底部工具栏压在画面上。手机屏的高宽比 = 手机屏幕的高宽比扣掉上下各 uuInset，
-// 画面正好落在工具栏和灵动岛之间（17 Pro Max 上是 540×950）。手机屏幕从哪来见 PhoneModels。
+// 比例：UU 工具栏自动隐藏时，虚拟屏按手机屏幕比例铺满可用画面。
 // 宽度：平时用基准宽度，越窄字越大，最窄到 2 倍高清的门槛（宽 540、高 800，实测）。App 限定了最小尺寸、基准宽度铺不满时，
 // 手机屏换成刚好装得下它的一档，窗口照样铺满，整屏等比缩小（字跟着小，手机上可以双指放大）。
 // 不按 App 预设：放窗口时先按基准宽度铺，App 卡在自己的最小尺寸上，读回来的大小就是它要的，据此选档。
@@ -18,15 +17,10 @@ public struct ScreenFit: Equatable, Sendable, CustomStringConvertible {
     public static let maxWidth = 1080
     /// 相邻两档差 10 点：装下窗口后最多多缩 2%
     public static let step = 10
-    /// 高宽比的范围：最方到正方形（折叠屏内屏扣掉工具栏后比这还方），最长到 2（像素上限按它定）
+    /// 高宽比的范围：最方到正方形，最长到 2（像素上限按它定）
     public static let ratioRange: ClosedRange<Double> = 1...2
     /// 像素上限：最宽一档按最长比例的 2 倍，所有比例共用。换比例时屏幕身份不变、不多出 ICC 文件（实测）
     public static let maxPixels = CGSize(width: maxWidth * 2, height: Int(Double(maxWidth) * ratioRange.upperBound) * 2)
-    /// 画面上下各让出的高度（点）。UU 底部工具栏 17 Pro Max 实测约 268 像素（89 点）；取 91 让 17 Pro Max 正好是
-    /// 真机上调好的 540×950（取 89 是 540×955），多出的 2 点当余量
-    static let uuInset: Double = 91
-    /// 不知道逻辑宽度时（安卓、自己填的）按这个估：安卓手机默认显示大小下常见 360–412dp
-    static let assumedPoints: Double = 400
     /// 基准宽度下底部小横条的高度（点）
     static let baseHomeBarHeight: CGFloat = 28
 
@@ -37,13 +31,12 @@ public struct ScreenFit: Equatable, Sendable, CustomStringConvertible {
     /// 登记的档位：基准宽度到最宽一档，每 10 点一档
     public let widths: [Int]
 
-    /// 没选过手机时的比例（540×950）
+    /// 没选过手机时使用默认机型的比例
     public static let standard = ScreenFit(phone: PhoneChoice.standard.screen)
 
     /// 按用户的手机算比例
     public init(phone: PhoneScreen) {
-        let points = phone.points.map(Double.init) ?? Self.assumedPoints
-        self.init(ratio: Double(phone.height) / Double(phone.width) - 2 * Self.uuInset / points)
+        self.init(ratio: Double(phone.height) / Double(phone.width))
     }
 
     init(ratio: Double) {
