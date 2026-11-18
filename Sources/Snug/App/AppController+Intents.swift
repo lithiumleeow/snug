@@ -132,6 +132,7 @@ extension AppController: AppIntents {
 
 extension AppController: PhoneIntents {
     func pull(_ window: WindowInfo) { desk.pull(window) }
+    func toggleSideWindow(_ window: WindowInfo) { desk.toggleSideWindow(window) }
 
     func open(_ app: AppInfo) {
         switch AppList.action(for: app, running: catalog.running) {

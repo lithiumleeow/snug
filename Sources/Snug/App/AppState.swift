@@ -92,6 +92,7 @@ protocol AppIntents: AnyObject, Sendable {
 @MainActor
 protocol PhoneIntents: AnyObject, Sendable {
     func pull(_ window: WindowInfo)
+    func toggleSideWindow(_ window: WindowInfo)
     /// 点一个 App：在跑且有窗口就放最近用过的那个，否则打开它、等新窗口出来再放（见 AppList.action）
     func open(_ app: AppInfo)
     func newWindow(_ app: RunningApp)
@@ -112,6 +113,10 @@ protocol PhoneIntents: AnyObject, Sendable {
     func cancelCrop()
     /// selection 是图片里的比例（0…1，见 CropGeometry）
     func finishCrop(_ selection: CGRect)
+}
+
+extension PhoneIntents {
+    func toggleSideWindow(_ window: WindowInfo) {}
 }
 
 /// 打开各个窗口

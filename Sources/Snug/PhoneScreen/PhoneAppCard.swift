@@ -25,7 +25,9 @@ struct AppCard: View {
                 let onPhone = window.key == placed?.window.key
                 Divider().padding(.leading, 80)
                 WindowRow(window: window, onPhone: onPhone, closing: phone.closing.contains(window.key),
-                          confirming: $confirming, intents: intents)
+                          confirming: $confirming, intents: intents,
+                          canSplit: phone.landscape && phone.placed != nil && !onPhone,
+                          isSideWindow: phone.sideWindow == window.key)
                 if onPhone, let placed {
                     PlacedControls(placed: placed, work: phone.work, intents: intents)
                 }
@@ -79,6 +81,9 @@ private struct WindowRow: View {
     @Binding var confirming: PhoneHomeView.Confirm?
     let intents: any PhoneIntents
 
+    let canSplit: Bool
+    let isSideWindow: Bool
+
     private var askingClose: Bool { confirming == .close(window.key) }
 
     var body: some View {
@@ -120,6 +125,14 @@ private struct WindowRow: View {
         } else if askingClose {
             ConfirmButtons(title: "关闭", confirming: $confirming) { intents.close(window) }
         } else {
+            if canSplit {
+                Button { intents.toggleSideWindow(window) } label: {
+                    Image(systemName: isSideWindow ? "rectangle" : "rectangle.split.2x1")
+                        .frame(width: PhoneStyle.touchTarget, height: PhoneStyle.touchTarget)
+                }
+                .buttonStyle(PressableStyle())
+                .accessibilityLabel(isSideWindow ? "取消并排" : "放到右侧并排")
+            }
             Button { confirming = .close(window.key) } label: {
                 Image(systemName: "xmark.circle.fill")
                     .font(PhoneStyle.headline.weight(.regular))

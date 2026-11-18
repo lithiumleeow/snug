@@ -28,6 +28,8 @@ public final class PhoneDesk {
         public var screen = Screen.off
         /// 手机屏上的窗口
         public var placed: Placed?
+        public var landscape = false
+        public var sideWindow: WindowKey?
         /// 手机屏上露着 App 资源库。没放窗口时总是露着
         public var listVisible = true
         /// 正在做的事，做完回到 nil
@@ -154,6 +156,7 @@ public final class PhoneDesk {
     private let apps: any AppControl
     private let timeline: any Timeline
     private let ledger: RestoreRecord<PhoneRecord>
+    private let sideLedger: RestoreRecord<PhoneRecord>
     private let zoomFile: JSONFile<ZoomBook>
     private var zoomBook: ZoomBook
     private let landscapeZoomFile: JSONFile<ZoomBook>
@@ -207,6 +210,7 @@ public final class PhoneDesk {
         self.defaultZoom = defaultZoom
         self.fit = fit
         ledger = RestoreRecord(url: paths.phoneRecord)
+        sideLedger = RestoreRecord(url: paths.phoneRecord.deletingLastPathComponent().appendingPathComponent("phone-side-window.json"))
         zoomFile = JSONFile(url: paths.zoomBook)
         zoomBook = zoomFile.loadOrQuarantine() ?? ZoomBook()
         landscapeZoomFile = JSONFile(url: paths.zoomBook.deletingLastPathComponent().appendingPathComponent("zoom-landscape.json"))
@@ -251,6 +255,88 @@ public final class PhoneDesk {
         lane.run {
             await self.place(window)
             self.state.work = nil
+        }
+    }
+
+    /// 横屏上把选中的第二个窗口放到右侧；再次点同一入口时还原它。
+    public func toggleSideWindow(_ window: WindowInfo) {
+        guard activeLandscape != nil, let primary = placement, primary.window.key != window.key else { return }
+        begin(.placing(window))
+        lane.run {
+            defer { self.state.work = nil }
+            guard let id = self.activeLandscape, var primary = self.placement,
+                  primary.window.key != window.key else { return }
+            let previous = self.state.sideWindow
+            guard await self.restoreSideWindow() else { return }
+            if previous != nil {
+                primary.settled = nil
+                self.placement = primary
+                if previous == window.key {
+                    await self.reveal()
+                    return
+                }
+                await self.refill(because: "更换并排窗口")
+                primary = self.placement ?? primary
+            }
+            // 全屏和最小化窗口先按普通流程打开，再从资源库选来并排。
+            guard let look = await self.reach(window), !look.fullScreen, !look.minimized,
+                  let area = self.displays.windowArea(id) else {
+                self.state.notice = .windowUnresponsive(app: window.app)
+                return
+            }
+            let halves = area.divided(atDistance: floor(area.width / 2), from: .minXEdge)
+            let record = PhoneRecord(window: window.key, app: window.app, label: window.label,
+                                     original: self.originalFrame(look.frame, offPhone: id),
+                                     wasFullScreen: false, wasMinimized: false,
+                                     bundleID: window.bundleID, title: window.title)
+            do {
+                try self.sideLedger.record(record)
+            } catch {
+                self.state.notice = .recordUnwritable
+                Log.error("并排窗口的还原记录写不进去：\(error)")
+                return
+            }
+            guard let right = await self.windows.move(window.key, to: halves.remainder),
+                  right.matches(halves.remainder) else {
+                _ = await self.restoreSideWindow()
+                self.state.notice = .windowUnresponsive(app: window.app)
+                return
+            }
+            self.state.sideWindow = window.key
+            guard let left = await self.fill(&primary, on: id), left.matches(halves.slice) else {
+                _ = await self.restoreSideWindow()
+                primary.settled = nil
+                self.placement = primary
+                await self.refill(because: "取消并排")
+                self.state.notice = .windowUnresponsive(app: primary.window.app)
+                return
+            }
+            self.placement = primary
+            self.state.listVisible = false
+            await self.windows.focus(window.key)
+        }
+    }
+
+    @discardableResult
+    private func restoreSideWindow() async -> Bool {
+        guard let record = sideLedger.pending() else {
+            state.sideWindow = nil
+            return true
+        }
+        if await windows.exists(record.window),
+           await windows.move(record.window, to: record.original) == nil {
+            state.notice = .windowUnresponsive(app: record.app)
+            Log.warn("并排窗口 \(record.label) 暂时放不回原位")
+            return false
+        }
+        do {
+            try sideLedger.settle()
+            state.sideWindow = nil
+            return true
+        } catch {
+            state.notice = .recordUnwritable
+            Log.error("并排窗口的还原记录删不掉：\(error)")
+            return false
         }
     }
 
@@ -319,6 +405,16 @@ public final class PhoneDesk {
         state.notice = nil
         state.closing.insert(window.key)
         lane.run {
+            if self.state.sideWindow == window.key {
+                guard await self.restoreSideWindow() else {
+                    self.state.closing.remove(window.key)
+                    return
+                }
+                if var primary = self.placement {
+                    primary.settled = nil
+                    self.placement = primary
+                }
+            }
             if let p = self.placement, p.window.key == window.key {
                 guard await self.returnToOriginal(p, restoringState: false) else {
                     Log.warn("\(p.window.label) 放不回去，先不关")
@@ -444,7 +540,9 @@ public final class PhoneDesk {
         lane.run {
             guard self.display?.id == primary, self.requestedDisplay == id,
                   self.activeDisplay != id else { return }
+            await self.restoreSideWindow()
             self.activeLandscape = id == primary ? nil : id
+            self.state.landscape = self.activeLandscape != nil
             self.state.closeButton = nil
             let showList = self.state.listVisible
             if var placement = self.placement {
@@ -495,8 +593,15 @@ public final class PhoneDesk {
         lane.run {
             defer { self.verifying = false }
             guard let p = self.placement else { return }
+            if let side = self.state.sideWindow, await !self.windows.isShown(side), await self.restoreSideWindow() {
+                var primary = p
+                primary.settled = nil
+                self.placement = primary
+                if !self.state.listVisible { await self.refill(because: "并排窗口已离开") }
+            }
             guard await self.windows.exists(p.window.key) else {
                 Log.info("手机屏上的 \(p.window.label) 在 Snug 之外关了，回到 App 资源库")
+                await self.restoreSideWindow()
                 self.placement = nil
                 self.state.listVisible = true
                 self.replaced = (p.window.key.pid, p.known.union([p.window.key]), self.timeline.now + Self.replaceWait)
@@ -543,7 +648,10 @@ public final class PhoneDesk {
 
     /// 有辅助功能权限后调用：上次 Snug 没来得及放回去的窗口，按记录放回去。记录在队里轮到时才读，不会拿旧的放两遍
     public func recover() {
-        lane.run { await self.putBackLeftover() }
+        lane.run {
+            if self.state.sideWindow == nil { await self.restoreSideWindow() }
+            await self.putBackLeftover()
+        }
     }
 
     /// 定期调用（和 verifyPlacement 同一拍）：刚在 Snug 之外没了的窗口，它的 App 换没换个新窗口（换了就接着放上来）；
@@ -638,6 +746,9 @@ public final class PhoneDesk {
     }
 
     private func removeScreen() async {
+        await restoreSideWindow()
+        state.sideWindow = nil
+        state.landscape = false
         // 屏要撤了，手机屏上不再算有窗口；放不回去的留着还原记录，下次放窗口或下次启动再放
         if let p = placement { await putBack(p.record) }
         placement = nil
@@ -781,7 +892,11 @@ public final class PhoneDesk {
     @discardableResult
     private func fill(_ p: inout Placement, on id: DisplayID) async -> CGRect? {
         await switchWidth(id, to: p.width)
-        guard let area = displays.windowArea(id), let got = await windows.move(p.window.key, to: area) else { return nil }
+        guard let available = displays.windowArea(id) else { return nil }
+        let area = id == activeLandscape && state.sideWindow != nil
+            ? available.divided(atDistance: floor(available.width / 2), from: .minXEdge).slice
+            : available
+        guard let got = await windows.move(p.window.key, to: area) else { return nil }
         p.settled = got
         // App 关窗时存下的就是这个大小：窗口在 Snug 之外没了，凭它认出回来的是不是它
         p.record.filled = got
@@ -827,7 +942,7 @@ public final class PhoneDesk {
             return
         }
         // 先确认要放的窗口够得着，再动手机屏上现在那个：点到刚关掉的卡片，不能先把现在的拆了、两头落空
-        guard await reach(window) != nil else { return }
+        guard await reach(window) != nil, await restoreSideWindow() else { return }
         // 原来那个、或上次没放回去的那个放不回去（App 卡住）就不放：两个窗口会叠在手机屏上，还原记录也只记得住一个
         if let p = placement, await !returnToOriginal(p) {
             Log.warn("\(p.window.label) 放不回去，先不换成 \(window.label)")
@@ -1085,6 +1200,7 @@ public final class PhoneDesk {
     /// 放回原位、回到 App 资源库，返回放回去了没有。restoringState 为 false 时不恢复全屏、最小化（马上要关的窗口）。
     /// 没放回去时窗口还在手机屏上，照旧算放着（字号按实际缩回了多少算），还原记录也留着
     private func returnToOriginal(_ p: Placement, restoringState: Bool = true) async -> Bool {
+        guard await restoreSideWindow() else { return false }
         if let left = await putBack(p.record, restoringState: restoringState) {
             var p = p
             p.record = left
