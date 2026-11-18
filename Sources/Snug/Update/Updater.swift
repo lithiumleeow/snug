@@ -87,6 +87,9 @@ final class Updater {
     /// 查一次有没有新版本。不轮询：启动时查一次，之后只有用户点了才查。
     /// waitForNetwork：开机自启时网可能还没起来，等它连上再问
     func check(userInitiated: Bool, waitForNetwork: Bool = false) {
+        if Bundle.main.object(forInfoDictionaryKey: "SnugDuoPackage") as? Bool == true {
+            return
+        }
         guard let current = Self.current, !busy else { return }
         let source = state.config.updateSource
         state.update.phase = .checking

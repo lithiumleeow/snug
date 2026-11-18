@@ -1,0 +1,21 @@
+name: Build Snug Duo DMG
+on:
+  push:
+    branches: [duo-fullscreen]
+    paths: [.github/workflows/duo-dmg.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: macos-26
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/snug duo-dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Snug-Duo-macOS
+          path: dist/duo/
+          if-no-files-found: error
+          retention-days: 30
