@@ -212,7 +212,7 @@ final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
-/// 底部小横条：点一下，或者往上滑，回到 App 资源库。横屏箭头靠右，避开手机中间的小白条。
+/// 底部小横条：点一下，或者往上滑，回到 App 资源库。箭头靠右，避开手机中间的小白条。
 /// 开着截图键时左边多一个相机键（camera.viewfinder），点左边这一段是截图。
 /// 手机屏换到更宽的一档时跟着放大（scale），在手机上看着、点着、滑着都和基准宽度一样
 final class HomeBarView: NSView {
@@ -265,8 +265,7 @@ final class HomeBarView: NSView {
         super.layout()
         camera.frame = cameraArea
         let targetWidth = PhoneStyle.touchTarget * scale
-        let centerX = landscape ? bounds.maxX - targetWidth / 2 : bounds.midX
-        grabber.frame = NSRect(x: centerX - targetWidth / 2, y: 0,
+        grabber.frame = NSRect(x: bounds.maxX - targetWidth, y: 0,
                                width: targetWidth, height: bounds.height)
     }
 
