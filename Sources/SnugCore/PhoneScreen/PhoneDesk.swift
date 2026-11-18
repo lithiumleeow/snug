@@ -164,6 +164,9 @@ public final class PhoneDesk {
     /// 远程在不在进行（会话层的结论，含断开后等重连的那段）：这期间别的屏可能处在远程用的临时模式
     private var remote = false
     private var display: (id: DisplayID, bornAt: TimeInterval)?
+    private var activeLandscape: DisplayID?
+    private var requestedDisplay: DisplayID?
+    private var activeDisplay: DisplayID? { activeLandscape ?? display?.id }
     /// 撤掉了、还没真正下线的手机屏：下线那一刻 macOS 才挪窗口、拨别的屏。显示器睡着（Mac 锁屏）时释放的虚拟屏
     /// 要等唤醒才下线（实测，可能是几小时后），等它真下线了再按撤屏前的样子放回（settleDisplays）
     private var retiring: Retiring?
@@ -419,6 +422,27 @@ public final class PhoneDesk {
         }
     }
 
+    /// UU 手动选屏后，把同一份资源库切到正在推流的手机屏。
+    public func selectDisplay(_ id: DisplayID, landscape: DisplayID?) {
+        guard let primary = display?.id, id == primary || id == landscape,
+              requestedDisplay != id else { return }
+        requestedDisplay = id
+        lane.run {
+            guard self.display?.id == primary, self.requestedDisplay == id,
+                  self.activeDisplay != id else { return }
+            self.activeLandscape = id == primary ? nil : id
+            self.state.closeButton = nil
+            if var placement = self.placement {
+                placement.width = self.screenFit.baseWidth
+                placement.settled = nil
+                self.placement = placement
+            }
+            self.state.screen = .ready(id)
+            self.state.listVisible = true
+            await self.matchWidth()
+        }
+    }
+
     /// 屏幕配置变了（插拔外接屏、系统改模式、Snug 自己换档、撤掉的屏真下线了）：过一会儿检查手机屏还是不是该用的那一档、
     /// 窗口还铺不铺满；撤屏没办完的接着办
     public func displaysChanged() {
@@ -608,6 +632,8 @@ public final class PhoneDesk {
         onTopologyChange?()
         let offline = await displays.retire(id)
         display = nil
+        activeLandscape = nil
+        requestedDisplay = nil
         // 原本就在手机屏上的窗口（手机上新开的）交给系统安置：那块屏已经没了，放回原处只会落到屏幕外
         if let screen = gone { before.windows = before.windows.filter { !screen.contains(CGPoint(x: $0.value.midX, y: $0.value.midY)) } }
         // 远程结束后撤屏（UU 已经还原），撤屏前的样子就是用户自己的设置：系统套用旧模式时也写进了永久配置，
@@ -674,9 +700,9 @@ public final class PhoneDesk {
         // 窗口要的档位按新比例从基准宽度重新找；忘掉上次挪完的样子，露出来时一定重新铺
         p.width = fit.baseWidth
         p.settled = nil
-        if !state.listVisible {
+        if !state.listVisible, let activeDisplay {
             Log.info("换了比例，\(p.window.label) 按新比例重新铺满")
-            await fill(&p, on: id)
+            await fill(&p, on: activeDisplay)
         }
         placement = p
     }
@@ -689,9 +715,9 @@ public final class PhoneDesk {
     /// 或者窗口被挪动、撑大了（换档时系统会挪它；终端类 App 调字号时会按行列数撑大窗口）。
     /// 跟上次挪完的样子比，不跟可放区域比：比最宽一档还宽的窗口本来就铺不满，再挪也一样
     private func refill(because reason: String) async {
-        guard let id = display?.id, var p = placement, let frame = await windows.look(p.window.key)?.frame else { return }
+        guard let id = activeDisplay, var p = placement, let frame = await windows.look(p.window.key)?.frame else { return }
         let moved = p.settled.map { !frame.matches($0) } ?? true
-        guard moved || displays.width(id) != p.width else { return }
+        guard moved || (id != activeLandscape && displays.width(id) != p.width) else { return }
         let what = moved ? "变成了 \(frame.short)" : "要的 \(p.width) 宽不是手机屏现在这一档"
         Log.info("\(reason)，\(p.window.label) \(what)，重新铺满")
         await fill(&p, on: id)
@@ -713,12 +739,12 @@ public final class PhoneDesk {
 
     /// 让手机屏跟上该用的那一档
     private func matchWidth() async {
-        guard let id = display?.id else { return }
+        guard let id = activeDisplay else { return }
         await switchWidth(id, to: wantedWidth)
     }
 
     private func switchWidth(_ id: DisplayID, to width: Int) async {
-        if displays.width(id) != width { await displays.setWidth(id, width) }
+        if id != activeLandscape, displays.width(id) != width { await displays.setWidth(id, width) }
     }
 
     /// 手机屏换到窗口那一档，把窗口铺满。铺不满（App 限定了最小尺寸）就按它实际的大小换到装得下的一档再铺。
@@ -738,7 +764,7 @@ public final class PhoneDesk {
         }
         // 窗口落到了区域原点、只是尺寸被夹住，才是 App 限定了最小尺寸；没挪过去（App 不认挪动）就不按它的大小换档
         let placed = abs(got.minX - area.minX) < 2 && abs(got.minY - area.minY) < 2
-        guard placed, let current = displays.width(id) else { return got }
+        guard placed, id != activeLandscape, let current = displays.width(id) else { return got }
         let width = screenFit.width(toFit: got.size, in: area.size, at: current)
         guard width > current, width != p.width else { return got }
         Log.info("\(p.window.label) 在 \(current) 宽的手机屏上铺不满（App 限定了最小尺寸，实际 \(got.short)），换到 \(width) 宽")
@@ -749,7 +775,7 @@ public final class PhoneDesk {
     /// 收起列表、露出手机屏上的窗口：先换到它那一档、重新铺满，再收列表、激活它。
     /// 换档时列表还盖着，手机上看不到窗口被挪来挪去
     private func reveal() async {
-        guard let id = display?.id, let p = placement else { return }
+        guard let id = activeDisplay, let p = placement else { return }
         // 先换档：App 一时读不到时 refill 什么都不做，档位也得对；换档触发的复查会在 App 恢复后补铺
         await switchWidth(id, to: p.width)
         await refill(because: "回到窗口")
@@ -1193,7 +1219,7 @@ public final class PhoneDesk {
     }
 
     private func takeBack(_ i: Int, window: WindowInfo, frame: CGRect) async {
-        if wanted, placement == nil, let id = display?.id,
+        if wanted, placement == nil, let id = activeDisplay,
            displays.bounds(id)?.contains(CGPoint(x: frame.midX, y: frame.midY)) == true {
             // 还在远程、回到了手机屏上：接着放（place 认得出这笔账，原位、字号接着用）
             await placeOnItsOwn(window)
@@ -1252,7 +1278,7 @@ public final class PhoneDesk {
 
     /// 可以放窗口的手机屏；没好时写明是哪一步没好
     private func readyDisplay(for what: String) -> DisplayID? {
-        guard let id = display?.id else {
+        guard let id = activeDisplay else {
             Log.warn("\(what)：没有手机屏（\(state.screen)）")
             return nil
         }

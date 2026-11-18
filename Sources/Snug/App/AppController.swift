@@ -16,6 +16,7 @@ final class AppController: Sendable {
     let state = AppState()
     let updater: Updater
     let desk: PhoneDesk
+    private let phoneDisplays: PhoneDisplayService
     /// 手机屏 App 资源库的统一数据源。界面碰得到的系统入口只有 desk 和它
     let catalog: AppCatalog
     /// 手机屏上的截图（小横条的相机键）
@@ -45,7 +46,9 @@ final class AppController: Sendable {
         let helper = Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])
         let windows = WindowService()
         let apps = AppService()
-        desk = PhoneDesk(displays: PhoneDisplayService(helper: helper), windows: windows, apps: apps, paths: paths,
+        let phoneDisplays = PhoneDisplayService(helper: helper)
+        self.phoneDisplays = phoneDisplays
+        desk = PhoneDesk(displays: phoneDisplays, windows: windows, apps: apps, paths: paths,
                          defaultZoom: store.config.zoomSteps, fit: ScreenFit(phone: phone.screen))
         catalog = AppCatalog(apps: apps, windows: windows)
         state.config = store.config
@@ -142,7 +145,11 @@ final class AppController: Sendable {
         state.update(\.connection, session.isConnected ? .connected : (session.inEpisode ? .reconnecting : .idle))
         state.update(\.controllers, session.controllers)
         // 在推哪块屏只能按一路推流推断：几台同时连着时各推各的、日志混在一起，当作不知道（手机屏上的列表照旧刷新）
-        state.update(\.streamedDisplay, session.controllers.count > 1 ? nil : sample.streamingDisplay)
+        let streamedDisplay = session.controllers.count > 1 ? nil : sample.streamingDisplay
+        state.update(\.streamedDisplay, streamedDisplay)
+        if let streamedDisplay {
+            desk.selectDisplay(streamedDisplay, landscape: phoneDisplays.landscapeDisplayID)
+        }
     }
 
     /// 要不要手机屏：开着总开关、有权限，这次远程的控制端里有不是电脑的（见 RemoteSession.wantsPhoneScreen）

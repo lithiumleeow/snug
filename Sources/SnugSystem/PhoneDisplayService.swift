@@ -22,6 +22,7 @@ public final class PhoneDisplayService: PhoneDisplays {
     static let modesTimeout: TimeInterval = 3
 
     private var landscapeDisplay: CGVirtualDisplay?
+    public var landscapeDisplayID: DisplayID? { landscapeDisplay?.displayID }
     private var displays: [DisplayID: CGVirtualDisplay] = [:]
     /// 每块屏登记的是哪个比例的档位：换档时按它算高
     private var fits: [DisplayID: ScreenFit] = [:]
